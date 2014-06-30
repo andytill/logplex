@@ -31,11 +31,10 @@ DowngradeNode = fun () ->
     ok
 end.
 
-
 f(UpgradeNode).
 UpgradeNode = fun () ->
-    CurVsn = "v73",
-    NextVsn = "firehose-spike",
+    CurVsn = "v72.1",
+    NextVsn = "v73",
     case logplex_app:config(git_branch) of
         CurVsn ->
             io:format(whereis(user), "at=upgrade_start cur_vsn=~p~n", [tl(CurVsn)]);
@@ -75,6 +74,7 @@ UpgradeNode = fun () ->
     ok = application:set_env(logplex, git_branch, NextVsn),
     ok
 end.
+
 f(NodeVersions).
 NodeVersions = fun () ->
     lists:keysort(3,
@@ -120,11 +120,13 @@ RollingUpgrade = fun (Nodes) ->
 end.
 
 
+f(Activate).
 Activate = fun () ->
-    application:set_env(logplex, firehose_channel_ids, "5586339,5586340,5586399"),
-    {shard_pool,master_shard,3,{5586339,5586340,5586399}} = logplex_firehose:read_and_store_master_info(),
+    application:set_env(logplex, firehose_channel_ids, erlang:error("replace with comma separated list of channel IDs")),
+    ok = logplex_firehose:read_and_store_master_info(),
     ok
 end.
+f(RollingActivate).
 RollingActivate = fun (Nodes) ->
   lists:foldl(fun (N, {good, Activated}) ->
     case rpc:call(N, erlang, apply, [ Activate, [] ]) of
