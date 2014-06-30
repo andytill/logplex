@@ -31,12 +31,9 @@
 
 -export([post_msg/3]).
 
--export([create_ets_table/0,
-         lookup_shard/1,
+-export([create_ets_tables/0,
          next_shard/1,
          read_and_store_master_info/0]).
-
--export([next_hash/1]).
 
 -record(shard_pool, {key :: ?MASTER_KEY | logplex_channel:id(),
                      size=0 :: integer(),
@@ -46,7 +43,7 @@
 %%% API
 %%%--------------------------------------------------------------------
 
-create_ets_table() ->
+create_ets_tables() ->
     ets:new(?LOOKUP_TAB, [named_table, public, set,
                               {keypos, #shard_pool.key},
                               {read_concurrency, true}]),
@@ -57,16 +54,17 @@ create_ets_table() ->
 next_shard(ChannelId) when is_integer(ChannelId) ->
     lookup_shard(next_hash(ChannelId)).
 
-post_msg(SourceId, TokenName, Msg)
-  when is_integer(SourceId),
-       is_binary(TokenName) ->
+post_msg(SourceId, <<"heroku">>, Msg)
+  when is_integer(SourceId) ->
     case next_shard(SourceId) of
         undefined -> ok; % no shards, drop
         SourceId -> ok; % do not firehose a firehose
         ChannelId when is_integer(ChannelId) ->
             logplex_stats:incr(#firehose_stat{channel_id=ChannelId, key=firehose_post}),
             logplex_channel:post_msg({channel, ChannelId}, Msg)
-    end.
+    end;
+post_msg(_SourceId, _TokenName, _Msg) ->
+    ok.
 
 read_and_store_master_info() ->
     %% Ids = firehose_channel_ids(),

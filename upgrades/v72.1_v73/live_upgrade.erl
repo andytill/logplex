@@ -140,3 +140,25 @@ RollingActivate = fun (Nodes) ->
     {good, []},
     Nodes)
 end.
+
+
+f(Deactivate).
+Deactivate = fun () ->
+    application:unset_env(logplex, firehose_channel_ids),
+    ok = logplex_firehose:read_and_store_master_info(),
+    ok
+end.
+f(RollingDeactivate).
+RollingDeactivate = fun (Nodes) ->
+  lists:foldl(fun (N, {good, Deactivated}) ->
+    case rpc:call(N, erlang, apply, [ Deactivate, [] ]) of
+      ok ->
+        {good, [N | Deactivated]};
+      Else ->
+        {{bad, N, Else}, Deactivated}
+    end;
+    (N, {_, _} = Acc) -> Acc
+    end,
+    {good, []},
+    Nodes)
+end.
