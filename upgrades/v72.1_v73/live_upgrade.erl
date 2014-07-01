@@ -1,7 +1,7 @@
 f(DowngradeNode).
 DowngradeNode = fun () ->
     CurVsn = "firehose-spike",
-    NextVsn = "v72.1",
+    NextVsn = "v72",
     case logplex_app:config(git_branch) of
         CurVsn ->
             io:format(whereis(user), "at=upgrade_start cur_vsn=~p~n", [tl(CurVsn)]);
@@ -23,8 +23,10 @@ DowngradeNode = fun () ->
     {module, logplex_worker} = l(logplex_worker),
     {module, nsync_callback} = l(nsync_callback),
 
-    application:set_env(logplex, firehose_channel_ids, ""),
-    ets:delete(firehose),
+    application:unset_env(logplex, firehose_channel_ids),
+
+    ets:delete(firehose_workers),
+    ets:delete(firehose_master),
 
     io:format(whereis(user), "at=upgrade_end cur_vsn=~p~n", [NextVsn]),
     ok = application:set_env(logplex, git_branch, NextVsn),
@@ -33,8 +35,8 @@ end.
 
 f(UpgradeNode).
 UpgradeNode = fun () ->
-    CurVsn = "v72.1",
-    NextVsn = "v73",
+    CurVsn = "v73",
+    NextVsn = "firehose-spike",
     case logplex_app:config(git_branch) of
         CurVsn ->
             io:format(whereis(user), "at=upgrade_start cur_vsn=~p~n", [tl(CurVsn)]);
@@ -145,7 +147,6 @@ end.
 f(Deactivate).
 Deactivate = fun () ->
     application:unset_env(logplex, firehose_channel_ids),
-    ok = logplex_firehose:read_and_store_master_info(),
     ok
 end.
 f(RollingDeactivate).
