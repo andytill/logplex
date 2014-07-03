@@ -49,7 +49,8 @@ create_ets_tables() ->
                               {read_concurrency, true}]),
     ets:new(?WORKER_TAB, [named_table, public, set,
                               {keypos, 1},
-                              {read_concurrency, true}]).
+                              {read_concurrency, true}]),
+    [?LOOKUP_TAB, ?WORKER_TAB].
 
 next_shard(ChannelId) when is_integer(ChannelId) ->
     lookup_shard(next_hash(ChannelId)).
@@ -63,31 +64,17 @@ post_msg(SourceId, <<"heroku">>, Msg)
             logplex_stats:incr(#firehose_stat{channel_id=ChannelId, key=firehose_post}),
             logplex_channel:post_msg({channel, ChannelId}, Msg)
     end;
-post_msg(_SourceId, _TokenName, _Msg) ->
+post_msg(SourceId, TokenName, _Msg) 
+  when is_integer(SourceId),
+       is_binary(TokenName)->
     ok.
 
 read_and_store_master_info() ->
-    %% Ids = firehose_channel_ids(),
-    %% Seed = [ Id || _ <- lists:seq(1, length(Ids)), Id <- Ids ],
     Seed = firehose_channel_ids(),
     ets:insert(?LOOKUP_TAB,
                #shard_pool{key=?MASTER_KEY, size=length(Seed), pool=Seed }),
     store_channels(1, Seed),
     ok.
-
-store_channels(_Index, []) ->
-    ok;
-store_channels(Index, [Id | Rest]) ->
-    ets:insert(?WORKER_TAB, {Index, Id}),
-    store_channels(Index+1, Rest).
-
-firehose_channel_ids() ->
-    case logplex_app:config(firehose_channel_ids, []) of
-        [] -> [];
-        Ids when is_list(Ids) ->
-            ChannelIdStrings = string:tokens(logplex_app:config(firehose_channel_ids, ""), ","),
-            [ list_to_integer(Id) || Id <- ChannelIdStrings ]
-    end.
 
 %%%--------------------------------------------------------------------
 %%% private functions
@@ -97,6 +84,14 @@ compute_hash(_, 0) ->
     0;
 compute_hash(ChannelId, Bounds) ->
     erlang:phash2({os:timestamp(), self(), ChannelId}, Bounds) + 1.
+
+firehose_channel_ids() ->
+    case logplex_app:config(firehose_channel_ids, []) of
+        [] -> [];
+        Ids when is_list(Ids) ->
+            ChannelIdStrings = string:tokens(logplex_app:config(firehose_channel_ids, ""), ","),
+            [ list_to_integer(Id) || Id <- ChannelIdStrings ]
+    end.
 
 lookup_shard(0) ->
     undefined;
@@ -111,3 +106,10 @@ next_hash(ChannelId) ->
         Num -> compute_hash(ChannelId, Num)
     catch error:badarg -> 0
     end.
+
+store_channels(_Index, []) ->
+    ok;
+store_channels(Index, [Id | Rest]) ->
+    ets:insert(?WORKER_TAB, {Index, Id}),
+    store_channels(Index+1, Rest).
+

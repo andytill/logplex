@@ -1,6 +1,51 @@
+f(UpgradeNode).
+UpgradeNode = fun () ->
+    CurVsn = "v72",
+    NextVsn = "v73",
+    case logplex_app:config(git_branch) of
+        CurVsn ->
+            io:format(whereis(user), "at=upgrade_start cur_vsn=~p~n", [tl(CurVsn)]);
+        NextVsn ->
+            io:format(whereis(user),
+                      "at=upgrade type=retry cur_vsn=~p old_vsn=~p~n", [tl(CurVsn), tl(NextVsn)]);
+        Else ->
+            io:format(whereis(user),
+                      "at=upgrade_start old_vsn=~p abort=wrong_version", [tl(Else)]),
+            erlang:error({wrong_version, Else})
+    end,
+
+    %% Stateless
+    {module, logplex_app} = l(logplex_app),
+    {module, logplex_db} = l(logplex_db),
+    {module, logplex_firehose} = l(logplex_firehose),
+    {module, logplex_message} = l(logplex_message),
+    {module, logplex_stats} = l(logplex_stats),
+    {module, logplex_worker} = l(logplex_worker),
+    {module, nsync_callback} = l(nsync_callback),
+
+    application:set_env(logplex, firehose_channel_ids, "26281516,26718104,26718116"),
+
+    Self = self(),
+    spawn_link(fun () ->
+        Owner = whereis(logplex_db),
+        [ ets:give_away(Tab, Owner, undefined) ||
+          Tab <- logplex_firehose:create_ets_tables() ],
+        Self ! ets_done
+    end),
+
+    receive
+        ets_done ->
+            logplex_firehose:read_and_store_master_info()
+    end,
+
+    io:format(whereis(user), "at=upgrade_end cur_vsn=~p~n", [NextVsn]),
+    ok = application:set_env(logplex, git_branch, NextVsn),
+    ok
+end.
+
 f(DowngradeNode).
 DowngradeNode = fun () ->
-    CurVsn = "firehose-spike",
+    CurVsn = "v73",
     NextVsn = "v72",
     case logplex_app:config(git_branch) of
         CurVsn ->
@@ -27,50 +72,6 @@ DowngradeNode = fun () ->
 
     ets:delete(firehose_workers),
     ets:delete(firehose_master),
-
-    io:format(whereis(user), "at=upgrade_end cur_vsn=~p~n", [NextVsn]),
-    ok = application:set_env(logplex, git_branch, NextVsn),
-    ok
-end.
-
-f(UpgradeNode).
-UpgradeNode = fun () ->
-    CurVsn = "v73",
-    NextVsn = "firehose-spike",
-    case logplex_app:config(git_branch) of
-        CurVsn ->
-            io:format(whereis(user), "at=upgrade_start cur_vsn=~p~n", [tl(CurVsn)]);
-        NextVsn ->
-            io:format(whereis(user),
-                      "at=upgrade type=retry cur_vsn=~p old_vsn=~p~n", [tl(CurVsn), tl(NextVsn)]);
-        Else ->
-            io:format(whereis(user),
-                      "at=upgrade_start old_vsn=~p abort=wrong_version", [tl(Else)]),
-            erlang:error({wrong_version, Else})
-    end,
-
-    %% Stateless
-
-    {module, logplex_app} = l(logplex_app),
-    {module, logplex_db} = l(logplex_db),
-    {module, logplex_firehose} = l(logplex_firehose),
-    {module, logplex_message} = l(logplex_message),
-    {module, logplex_stats} = l(logplex_stats),
-    {module, logplex_worker} = l(logplex_worker),
-    {module, nsync_callback} = l(nsync_callback),
-
-    spawn(fun () ->
-        ets:new(firehose_master,
-                [named_table, public, set,
-                 {keypos, 2},
-                 {read_concurrency, true},
-                 {heir, whereis(logplex_db), undefined}]),
-        ets:new(firehose_workers,
-                [named_table, public, set,
-                 {keypos, 1},
-                 {read_concurrency, true},
-                 {heir, whereis(logplex_db), undefined}])
-    end),
 
     io:format(whereis(user), "at=upgrade_end cur_vsn=~p~n", [NextVsn]),
     ok = application:set_env(logplex, git_branch, NextVsn),
@@ -121,34 +122,13 @@ RollingUpgrade = fun (Nodes) ->
     Nodes)
 end.
 
-
-f(Activate).
-Activate = fun () ->
-    application:set_env(logplex, firehose_channel_ids, erlang:error("replace with comma separated list of channel IDs")),
-    ok = logplex_firehose:read_and_store_master_info(),
-    ok
-end.
-f(RollingActivate).
-RollingActivate = fun (Nodes) ->
-  lists:foldl(fun (N, {good, Activated}) ->
-    case rpc:call(N, erlang, apply, [ Activate, [] ]) of
-      ok ->
-        {good, [N | Activated]};
-      Else ->
-        {{bad, N, Else}, Activated}
-    end;
-    (N, {_, _} = Acc) -> Acc
-    end,
-    {good, []},
-    Nodes)
-end.
-
-
 f(Deactivate).
 Deactivate = fun () ->
     application:unset_env(logplex, firehose_channel_ids),
+    logplex_firehose:read_and_store_master_info(),
     ok
 end.
+
 f(RollingDeactivate).
 RollingDeactivate = fun (Nodes) ->
   lists:foldl(fun (N, {good, Deactivated}) ->

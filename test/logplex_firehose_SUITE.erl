@@ -10,7 +10,7 @@
 -compile(export_all).
 
 all() ->
-    [set_env].
+    [master_config, post_msg, distribution].
 
 %%%%%%%%%%%%%%%%%%%%%%
 %%% Setup/Teardown %%%
@@ -31,15 +31,16 @@ init_per_testcase(_, Config) ->
 
 %% Runs after the test case. Runs in the same process.
 end_per_testcase(_CaseName, Config) ->
+    meck:unload(),
     Config.
 
 %%%%%%%%%%%%%
 %%% TESTS %%%
 %%%%%%%%%%%%%
 
-set_env(_Config) ->
+master_config(_Config) ->
     FirehoseChannelId = 21894100,
-    ChannelId = 21894100,
+    ChannelId = 21894200,
 
     logplex_firehose:create_ets_tables(),
     logplex_firehose:read_and_store_master_info(),
@@ -51,5 +52,87 @@ set_env(_Config) ->
     logplex_firehose:read_and_store_master_info(),
 
     FirehoseChannelId = logplex_firehose:next_shard(ChannelId),
+    FirehoseChannelId = logplex_firehose:next_shard(ChannelId),
     ok.
 
+post_msg(_Config) ->
+    FirehoseChannelId = 21894100,
+    ChannelId = 21894200,
+    Msg1 = term_to_binary(make_ref()),
+    Msg2 = term_to_binary(make_ref()),
+    Msg3 = term_to_binary(make_ref()),
+
+    meck:expect(logplex_channel, post_msg, [{[{channel, '_'}, '_'], ok}]),
+
+    ok = logplex_firehose:post_msg(ChannelId, <<"app">>, Msg1),
+    false = meck:called(logplex_channel, post_msg, [{channel, FirehoseChannelId}, Msg1]),
+
+    ok = logplex_firehose:post_msg(ChannelId, <<"heroku">>, Msg1),
+    false = meck:called(logplex_channel, post_msg, [{channel, FirehoseChannelId}, Msg1]),
+
+    application:set_env(logplex, firehose_channel_ids, lists:concat([FirehoseChannelId])),
+    logplex_firehose:create_ets_tables(),
+    logplex_firehose:read_and_store_master_info(),
+
+    ok = logplex_firehose:post_msg(ChannelId, <<"heroku">>, Msg1),
+    true = meck:called(logplex_channel, post_msg, [{channel, FirehoseChannelId}, Msg1]),
+    
+    ok = logplex_firehose:post_msg(ChannelId, <<"app">>, Msg2),
+    false = meck:called(logplex_channel, post_msg, [{channel, FirehoseChannelId}, Msg2]),
+
+    ok = logplex_firehose:post_msg(FirehoseChannelId, <<"heroku">>, Msg3),
+    false = meck:called(logplex_channel, post_msg, [{channel, FirehoseChannelId}, Msg3]),
+    
+    ok.
+
+distribution(_Config) ->
+    FirehoseChannelId = "21894100,21894101",
+    ChannelId = 21894200,
+
+    meck:expect(logplex_channel, post_msg, [{[{channel, '_'}, '_'], ok}]),
+
+    application:set_env(logplex, firehose_channel_ids, FirehoseChannelId),
+    logplex_firehose:create_ets_tables(),
+    logplex_firehose:read_and_store_master_info(),
+
+    [ send_messages(1000, ChannelId, <<"heroku">>) || _Id <- lists:seq(1, 100) ],
+
+    meck:wait(1000*100, logplex_channel, post_msg, [{channel, '_'}, '_'], 15000),
+    Calls1 = meck:num_calls(logplex_channel, post_msg, [{channel,21894100}, '_']),
+    Calls2 = meck:num_calls(logplex_channel, post_msg, [{channel,21894101}, '_']),
+    ct:pal("~p, ~p", [Calls1, Calls2]),
+
+    % assert random distribution with 0.5% accuracy
+    true = calls_within(Calls1, 1000*50, 0.005),
+    true = calls_within(Calls2, 1000*50, 0.005),
+    ok.
+
+%%%--------------------------------------------------------------------
+%%% private functions
+%%%--------------------------------------------------------------------
+
+calls_within(Amount, Target, Variance) when is_float(Variance) ->
+    Delta = Target * Variance,
+    calls_within(Amount, Target, round(Delta));
+
+calls_within(Amount, Target, Delta)
+  when is_integer(Delta),
+       Amount =< Target + Delta,
+       Amount >= Target - Delta ->
+    true;
+calls_within(_, _, _) ->
+    false.
+
+send_messages(Amount, Where, Token) ->
+    spawn_link(fun () ->
+                       send_messages_(Amount, Where, Token)
+               end).
+
+send_messages_(0, _Where, _Token) ->
+    done;
+send_messages_(Amount, Where, Token) ->
+    ok = logplex_firehose:post_msg(Where, Token, make_message()),
+    send_messages(Amount -1, Where, Token).
+
+make_message() ->
+    term_to_binary(make_ref()).
