@@ -100,6 +100,8 @@ cache_os_envvars() ->
                         integer}
                       ,{firehose_channel_ids, ["FIREHOSE_CHANNEL_IDS"],
                         optional}
+                      ,{firehose_filter_tokens, ["FIREHOSE_FILTER_TOKENS"],
+                        optional}
                       ,{local_ip, ["LOCAL_IP"]}
                       ,{metrics_namespace, ["METRICS_NAMESPACE"],
                         optional}

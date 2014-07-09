@@ -32,8 +32,11 @@
 -export([post_msg/3]).
 
 -export([create_ets_tables/0,
-         next_shard/1,
+         next_shard/2,
          read_and_store_master_info/0]).
+
+-export([firehose_channel_ids/0,
+         firehose_filter_tokens/0]).
 
 -record(shard_pool, {key :: ?MASTER_KEY | logplex_channel:id(),
                      size=0 :: integer(),
@@ -52,28 +55,27 @@ create_ets_tables() ->
                               {read_concurrency, true}]),
     [?LOOKUP_TAB, ?WORKER_TAB].
 
-next_shard(ChannelId) when is_integer(ChannelId) ->
-    lookup_shard(next_hash(ChannelId)).
+next_shard(ChannelId, Token) 
+  when is_integer(ChannelId),
+       is_binary(Token) ->
+    lookup_shard({next_hash(ChannelId), Token}).
 
-post_msg(SourceId, <<"heroku">>, Msg)
-  when is_integer(SourceId) ->
-    case next_shard(SourceId) of
+post_msg(SourceId, TokenName, Msg)
+  when is_integer(SourceId),
+       is_binary(TokenName) ->
+    case next_shard(SourceId, TokenName) of
         undefined -> ok; % no shards, drop
         SourceId -> ok; % do not firehose a firehose
         ChannelId when is_integer(ChannelId) ->
-            logplex_stats:incr(#firehose_stat{channel_id=ChannelId, key=firehose_post}),
             logplex_channel:post_msg({channel, ChannelId}, Msg)
-    end;
-post_msg(SourceId, TokenName, _Msg) 
-  when is_integer(SourceId),
-       is_binary(TokenName)->
-    ok.
+    end.
 
 read_and_store_master_info() ->
-    Seed = firehose_channel_ids(),
+    Ids = firehose_channel_ids(),
+    FilterTokens = firehose_filter_tokens(),
     ets:insert(?LOOKUP_TAB,
-               #shard_pool{key=?MASTER_KEY, size=length(Seed), pool=Seed }),
-    store_channels(1, Seed),
+               #shard_pool{key=?MASTER_KEY, size=length(Ids), pool=Ids }),
+    store_channels(1, Ids, FilterTokens),
     ok.
 
 %%%--------------------------------------------------------------------
@@ -86,16 +88,22 @@ compute_hash(ChannelId, Bounds) ->
     erlang:phash2({os:timestamp(), self(), ChannelId}, Bounds) + 1.
 
 firehose_channel_ids() ->
-    case logplex_app:config(firehose_channel_ids, []) of
+    [ list_to_integer(Id) || Id <- split_list(firehose_channel_ids) ].
+
+firehose_filter_tokens() ->
+    [ list_to_binary(Token) || Token <- split_list(firehose_filter_tokens) ].
+
+split_list(Env) ->
+    case logplex_app:config(Env, []) of
         [] -> [];
         Ids when is_list(Ids) ->
-            ChannelIdStrings = string:tokens(logplex_app:config(firehose_channel_ids, ""), ","),
-            [ list_to_integer(Id) || Id <- ChannelIdStrings ]
+            string:tokens(Ids, ",")
     end.
 
-lookup_shard(0) ->
+
+lookup_shard({0, _}) ->
     undefined;
-lookup_shard(ShardId) when is_integer(ShardId) ->
+lookup_shard(ShardId) ->
     try ets:lookup_element(?WORKER_TAB, ShardId, 2) of
         ChannelId -> ChannelId
     catch error:badarg -> undefined
@@ -107,9 +115,9 @@ next_hash(ChannelId) ->
     catch error:badarg -> 0
     end.
 
-store_channels(_Index, []) ->
+store_channels(_Index, [], _FilterTokens) ->
     ok;
-store_channels(Index, [Id | Rest]) ->
-    ets:insert(?WORKER_TAB, {Index, Id}),
-    store_channels(Index+1, Rest).
+store_channels(Index, [Id | Rest], FilterTokens) ->
+    [ ets:insert(?WORKER_TAB, {{Index, FilterToken}, Id}) || FilterToken <- FilterTokens ],
+    store_channels(Index+1, Rest, FilterTokens).
 

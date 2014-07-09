@@ -45,14 +45,17 @@ master_config(_Config) ->
     logplex_firehose:create_ets_tables(),
     logplex_firehose:read_and_store_master_info(),
 
-    undefined = logplex_firehose:next_shard(ChannelId),
-    undefined = logplex_firehose:next_shard(ChannelId),
+    undefined = logplex_firehose:next_shard(ChannelId, <<"app">>),
+    undefined = logplex_firehose:next_shard(ChannelId, <<"filtered">>),
 
     application:set_env(logplex, firehose_channel_ids, lists:concat([FirehoseChannelId])),
+    application:set_env(logplex, firehose_filter_tokens, "filtered"),
     logplex_firehose:read_and_store_master_info(),
 
-    FirehoseChannelId = logplex_firehose:next_shard(ChannelId),
-    FirehoseChannelId = logplex_firehose:next_shard(ChannelId),
+    undefined = logplex_firehose:next_shard(ChannelId, <<"app">>),
+    undefined = logplex_firehose:next_shard(ChannelId, <<"app">>),
+    FirehoseChannelId = logplex_firehose:next_shard(ChannelId, <<"filtered">>),
+    FirehoseChannelId = logplex_firehose:next_shard(ChannelId, <<"filtered">>),
     ok.
 
 post_msg(_Config) ->
@@ -71,6 +74,7 @@ post_msg(_Config) ->
     false = meck:called(logplex_channel, post_msg, [{channel, FirehoseChannelId}, Msg1]),
 
     application:set_env(logplex, firehose_channel_ids, lists:concat([FirehoseChannelId])),
+    application:set_env(logplex, firehose_filter_tokens, "heroku"),
     logplex_firehose:create_ets_tables(),
     logplex_firehose:read_and_store_master_info(),
 
@@ -92,6 +96,7 @@ distribution(_Config) ->
     meck:expect(logplex_channel, post_msg, [{[{channel, '_'}, '_'], ok}]),
 
     application:set_env(logplex, firehose_channel_ids, FirehoseChannelId),
+    application:set_env(logplex, firehose_filter_tokens, "heroku"),
     logplex_firehose:create_ets_tables(),
     logplex_firehose:read_and_store_master_info(),
 
